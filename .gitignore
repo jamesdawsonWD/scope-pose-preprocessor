@@ -2,7 +2,10 @@
 __pycache__/
 *.pyc
 .DS_Store
-*.task
 *.mp4
 output_*
-resources
+debug_frames/
+test_video.py
+
+# Model file in project root (the bundled copy in pose_skeleton_plugin/models/ IS tracked)
+/pose_landmarker.task

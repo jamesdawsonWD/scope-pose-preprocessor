@@ -91,7 +91,8 @@ class PoseSkeletonPipeline(Pipeline):
             )
 
         estimator = self._get_estimator()
-        landmarks = estimator.estimate(frame_for_mp) if estimator is not None else None
+        timestamp_ms = self._frame_count * 33  # monotonic ~30 fps fallback
+        landmarks = estimator.estimate(frame_for_mp, timestamp_ms=timestamp_ms) if estimator is not None else None
 
         if self._frame_count <= 3 or debug:
             n_lm = 0 if not landmarks else len(landmarks)
@@ -149,8 +150,8 @@ class PoseSkeletonPipeline(Pipeline):
                 "Install the plugin dependencies (mediapipe, opencv-python-headless)."
             )
 
-        self._estimator = MediaPipePoseEstimator()
-        logger.warning("[PoseSkeleton] MediaPipe estimator created")
+        self._estimator = MediaPipePoseEstimator(streaming=True)
+        logger.warning("[PoseSkeleton] MediaPipe estimator created (streaming mode)")
         return self._estimator
 
     def _get_connections(self) -> list[tuple[int, int]]:
