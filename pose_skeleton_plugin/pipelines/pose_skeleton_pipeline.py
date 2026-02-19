@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -31,11 +32,22 @@ class PoseSkeletonPipeline(Pipeline):
         self._connections = list(connections) if connections is not None else None
         self._smoother: LandmarkSmoother | None = None
         self._smoother_alpha: float | None = None
+        self._frame_count = 0
+        logger.warning("[PoseSkeleton] __init__ called, pipeline created")
 
     def prepare(self, **kwargs) -> Requirements:
+        logger.warning("[PoseSkeleton] prepare() called")
         return Requirements(input_size=1)
 
     def __call__(self, **kwargs) -> dict:
+        self._frame_count += 1
+        try:
+            return self._process(kwargs)
+        except Exception:
+            logger.error("[PoseSkeleton] CRASH in __call__:\n%s", traceback.format_exc())
+            raise
+
+    def _process(self, kwargs: dict) -> dict:
         video = kwargs.get("video")
         if video is None:
             raise ValueError("Input video cannot be None for PoseSkeletonPipeline")
@@ -50,17 +62,40 @@ class PoseSkeletonPipeline(Pipeline):
 
         frame_t = video[0]
         if not isinstance(frame_t, torch.Tensor):
-            raise TypeError("Expected video frames to be torch tensors")
+            raise TypeError(f"Expected torch.Tensor, got {type(frame_t)}")
 
         frame = frame_t.squeeze(0).detach().cpu().to(dtype=torch.float32).numpy()
         if frame.ndim != 3 or frame.shape[2] != 3:
             raise ValueError(f"Expected frame shape (1,H,W,3) -> (H,W,3); got {frame.shape}")
 
         H, W = int(frame.shape[0]), int(frame.shape[1])
-        frame_u8 = np.clip(frame, 0.0, 255.0).astype(np.uint8, copy=False)
+
+        # Auto-detect range: if max <= 1.0 the frame is already normalised → scale up.
+        fmin, fmax = float(frame.min()), float(frame.max())
+        if fmax <= 1.0 + 1e-3:
+            frame_for_mp = np.clip(frame * 255.0, 0.0, 255.0).astype(np.uint8)
+        else:
+            frame_for_mp = np.clip(frame, 0.0, 255.0).astype(np.uint8)
+
+        if self._frame_count <= 3 or debug:
+            logger.warning(
+                "[PoseSkeleton] frame#%d shape=%s dtype=%s range=[%.2f,%.2f] "
+                "frame_for_mp range=[%d,%d]",
+                self._frame_count,
+                tuple(frame_t.shape),
+                frame_t.dtype,
+                fmin,
+                fmax,
+                int(frame_for_mp.min()),
+                int(frame_for_mp.max()),
+            )
 
         estimator = self._get_estimator()
-        landmarks = estimator.estimate(frame_u8) if estimator is not None else None
+        landmarks = estimator.estimate(frame_for_mp) if estimator is not None else None
+
+        if self._frame_count <= 3 or debug:
+            n_lm = 0 if not landmarks else len(landmarks)
+            logger.warning("[PoseSkeleton] frame#%d landmarks=%d", self._frame_count, n_lm)
 
         if smooth <= 0.0:
             if self._smoother is not None:
@@ -86,23 +121,15 @@ class PoseSkeletonPipeline(Pipeline):
 
         out = torch.from_numpy(out_np).unsqueeze(0)  # (1,H,W,3) float32 in [0,1]
 
-        if debug:
+        if self._frame_count <= 3 or debug:
             nz = int(np.count_nonzero(out_np[..., 0] > 0))
-            n_lm = 0 if not smoothed else len(smoothed)
-            logger.info(
-                "[PoseSkeleton] in=%s range=[%.1f,%.1f] landmarks=%d nonzero=%d out=[%.3f,%.3f] "
-                "params(min_conf=%.2f thick=%d joint=%d smooth=%.2f)",
-                tuple(frame_t.shape),
-                float(frame.min()),
-                float(frame.max()),
-                n_lm,
+            logger.warning(
+                "[PoseSkeleton] frame#%d nonzero=%d out=[%.3f,%.3f] out.shape=%s",
+                self._frame_count,
                 nz,
                 float(out_np.min()),
                 float(out_np.max()),
-                min_confidence,
-                thickness,
-                joint_radius,
-                smooth,
+                tuple(out.shape),
             )
 
         return {"video": out}
@@ -113,13 +140,17 @@ class PoseSkeletonPipeline(Pipeline):
 
         try:
             from .pose_estimator_mediapipe import MediaPipePoseEstimator
-        except Exception as e:  # pragma: no cover (only when deps missing)
+        except Exception:
+            logger.error(
+                "[PoseSkeleton] Failed to import MediaPipe:\n%s", traceback.format_exc()
+            )
             raise RuntimeError(
                 "MediaPipe is required for PoseSkeletonPipeline. "
                 "Install the plugin dependencies (mediapipe, opencv-python-headless)."
-            ) from e
+            )
 
         self._estimator = MediaPipePoseEstimator()
+        logger.warning("[PoseSkeleton] MediaPipe estimator created")
         return self._estimator
 
     def _get_connections(self) -> list[tuple[int, int]]:
@@ -130,8 +161,14 @@ class PoseSkeletonPipeline(Pipeline):
             from .pose_estimator_mediapipe import get_mediapipe_pose_connections
 
             self._connections = get_mediapipe_pose_connections()
+            logger.warning(
+                "[PoseSkeleton] Loaded %d connections from MediaPipe", len(self._connections)
+            )
         except Exception:
-            # Minimal fallback: a simple stick line for safety.
+            logger.error(
+                "[PoseSkeleton] Failed to get connections, using fallback:\n%s",
+                traceback.format_exc(),
+            )
             self._connections = [(0, 1)]
         return self._connections
 
