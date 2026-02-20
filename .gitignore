@@ -1,11 +1,21 @@
-.venv
+.venv/
 __pycache__/
 *.pyc
+*.egg-info/
+dist/
+build/
 .DS_Store
+.pytest_cache/
+
+# Video / debug artefacts
 *.mp4
+*.avi
+*.mov
 output_*
 debug_frames/
-test_video.py
 
 # Model file in project root (the bundled copy in pose_skeleton_plugin/models/ IS tracked)
 /pose_landmarker.task
+
+# Resources (reference plugin, not part of this project)
+/resources/
