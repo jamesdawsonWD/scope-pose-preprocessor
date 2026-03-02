@@ -36,7 +36,6 @@ class PoseSkeletonPipeline(Pipeline):
         logger.warning("[PoseSkeleton] __init__ called, pipeline created")
 
     def prepare(self, **kwargs) -> Requirements:
-        logger.warning("[PoseSkeleton] prepare() called")
         return Requirements(input_size=1)
 
     def __call__(self, **kwargs) -> dict:
